@@ -1,0 +1,40 @@
+name: Build Kernel (Xiaomi-style uname)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ 0621kpm-aosp ]
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout kernel source
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            git zip wget bc bison build-essential \
+            flex libssl-dev ccache clang lld llvm \
+            gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi \
+            libncurses-dev python3
+
+      - name: Set up build environment
+        run: |
+          chmod +x build.sh
+
+      - name: Build kernel
+        run: |
+          ./build.sh
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Spiteful-Kernel
+          path: |
+            *.zip
+          if-no-files-found: error
+          
