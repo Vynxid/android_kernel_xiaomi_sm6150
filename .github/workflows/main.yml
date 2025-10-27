@@ -58,7 +58,6 @@ jobs:
           echo "🧩 Arch: $ARCH"
           echo "🔧 Cleaning output folder..."
           rm -rf out
-          curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s susfs-main
 
       - name: Build Kernel
         run: |
