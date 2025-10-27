@@ -1,40 +1,123 @@
-name: Build Kernel (Xiaomi-style uname)
+name: Build Kernel (4.14 - crDroid)
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "0 0 * * 6"
   push:
-    branches: [ 0621kpm-aosp ]
+    branches:
+      - HEAD
+  pull_request:
+    branches:
+      - HEAD
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
+
+    env:
+      ARCH: arm64
+      KBUILD_BUILD_USER: "builder"
+      KBUILD_BUILD_HOST: "xiaomi"
+      KBUILD_BUILD_VERSION: "1"
+      TZ: Asia/Jakarta
 
     steps:
       - name: Checkout kernel source
         uses: actions/checkout@v4
+        with:
+          submodules: "true"
+          fetch-depth: 100
 
-      - name: Install dependencies
+      - name: Set up ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+
+      - name: Install build dependencies
         run: |
-          sudo apt-get update
+          sudo apt-get update -y
           sudo apt-get install -y \
-            git zip wget bc bison build-essential \
-            flex libssl-dev ccache clang lld llvm \
-            gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi \
-            libncurses-dev python3
+            git git-lfs wget curl zip unzip bc bison flex build-essential \
+            libssl-dev ca-certificates xz-utils device-tree-compiler \
+            python3 cpio mkbootimg gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi aria2
 
-      - name: Set up build environment
+      - name: Clone Google Clang r547379 if not exist
         run: |
-          chmod +x build.sh
+          if [ ! -d "$PWD/clang" ]; then
+            echo "📦 Cloning Clang toolchain..."
+            git clone https://gitlab.com/crdroidandroid/android_prebuilts_clang_host_linux-x86_clang-r547379.git --depth=1 -b 15.0 clang
+          else
+            echo "✅ Using existing clang directory."
+          fi
+          echo "PATH=$PWD/clang/bin:$PATH" >> $GITHUB_ENV
+          echo "KBUILD_COMPILER_STRING=$($PWD/clang/bin/clang --version | head -n 1)" >> $GITHUB_ENV
 
-      - name: Build kernel
+      - name: Prepare build environment
         run: |
-          ./build.sh
+          echo "-perf+" > localversion
+          echo "💡 Compiler: $KBUILD_COMPILER_STRING"
+          echo "🧩 Arch: $ARCH"
+          echo "🔧 Cleaning output folder..."
+          rm -rf out
+          curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s susfs-main
 
-      - name: Upload build artifact
+      - name: Build Kernel
+        run: |
+          echo "🚀 Starting kernel build..."
+          make O=out ARCH=arm64 sweet_defconfig
+          make -j$(nproc --all) \
+            O=out \
+            ARCH=arm64 \
+            LLVM=1 \
+            LLVM_IAS=1 \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            CROSS_COMPILE_COMPAT=arm-linux-gnueabi-
+          
+          KERNEL=out/arch/arm64/boot/Image.gz
+          DTBO=out/arch/arm64/boot/dtbo.img
+          DTB=out/arch/arm64/boot/dtb.img
+
+          if [ ! -f "$KERNEL" ] || [ ! -f "$DTBO" ] || [ ! -f "$DTB" ]; then
+            echo "❌ Kernel build failed!"
+            exit 1
+          fi
+          echo "✅ Kernel build completed successfully."
+
+      - name: Package with AnyKernel3
+        run: |
+          echo "📦 Preparing AnyKernel3..."
+          if [ -d "AnyKernel3" ]; then
+            echo "Using existing AnyKernel3 directory."
+          else
+            git clone https://github.com/basamaryan/AnyKernel3.git -b master AnyKernel3
+          fi
+
+          ZIPNAME="[crDroid]-Kernel-sm8150-$(date '+%Y%m%d-%H%M').zip"
+
+          sed -i "s/kernel\.string=.*/kernel.string=crDroid Kernel (sm8150)/" AnyKernel3/anykernel.sh
+          sed -i "s/supported\.versions=.*/supported.versions=11-16/" AnyKernel3/anykernel.sh
+
+          cp out/arch/arm64/boot/Image.gz AnyKernel3/
+          cp out/arch/arm64/boot/dtbo.img AnyKernel3/
+          cp out/arch/arm64/boot/dtb.img AnyKernel3/
+
+          cd AnyKernel3
+          zip -r9 "../$ZIPNAME" * -x .git README.md
+          cd ..
+
+          echo "✅ ZIP created: $ZIPNAME"
+          echo "ZIPNAME=$ZIPNAME" >> $GITHUB_ENV
+
+      - name: Upload Kernel ZIP
         uses: actions/upload-artifact@v4
         with:
-          name: Spiteful-Kernel
+          name: ${{ env.ZIPNAME }}
+          path: ${{ env.ZIPNAME }}
+
+      - name: Upload Raw Outputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: Kernel-Raw-Files
           path: |
-            *.zip
-          if-no-files-found: error
-          
+            out/arch/arm64/boot/Image.gz
+            out/arch/arm64/boot/dtb.img
+            out/arch/arm64/boot/dtbo.img
